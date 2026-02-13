@@ -1,0 +1,10 @@
+low low low low low
+lower lower widest widest widest
+<|break|>
+newest newest newest newest newest newest
+<|endoftext|>
+apple apple apple apple
+apply apply apply cat cat cat
+<|break|>
+dog dog dog dig dig dig dig
+<|endoftext|>
