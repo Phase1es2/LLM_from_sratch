@@ -1,7 +1,7 @@
 import os
 import time
 
-from cs336_basics.train_bpe import train_bpe
+from cs336_basics.tokenizer.train_bpe import train_bpe
 from scripts.save_bpe import save_bpe_artifacts
 
 
