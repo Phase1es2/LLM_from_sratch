@@ -1,4 +1,0 @@
-token_id: 7160
-num_bytes: 15
-hex: 206163636f6d706c6973686d656e74
-latin1:  accomplishment
