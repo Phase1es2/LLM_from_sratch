@@ -79,15 +79,16 @@ class Tokenizer:
                 if rank is None:
                     continue
                 if best_rank is None or rank < best_rank:
-                    best_pair = pair
                     best_rank = rank
+                    best_pair = pair
 
             if best_pair is None:
                 break
 
-            A, B = best_pair
-            merged: list[bytes] = []
             i = 0
+            merged = []
+            A, B = best_pair
+
             while i < len(toks):
                 if i < len(toks) - 1 and toks[i] == A and toks[i + 1] == B:
                     merged.append(A + B)
@@ -96,9 +97,9 @@ class Tokenizer:
                     merged.append(toks[i])
                     i += 1
             toks = merged
-
             if len(toks) < 2:
                 break
+
         return toks
 
 

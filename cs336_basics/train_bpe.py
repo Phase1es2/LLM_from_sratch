@@ -1,3 +1,4 @@
+import heapq
 import os
 from collections import defaultdict
 from typing import Optional
@@ -5,11 +6,12 @@ from typing import Optional
 import regex as re
 
 from cs336_basics.config import PAT, INIT_TOKEN
-from cs336_basics.node import Node   # 建議不要用 import *，避免命名衝突
+from cs336_basics.utils.node import Node   # 建議不要用 import *，避免命名衝突
 from typing import Dict, Tuple
 from multiprocessing import Pool
 
 from cs336_basics.pretokenization_example import find_chunk_boundaries
+from cs336_basics.utils.revpair import RevPair
 
 # 你的 word_frequency key 型別
 WordFreq = Dict[Tuple[bytes, ...], int]
@@ -179,7 +181,7 @@ def build_word_dll(
                 p = (prev.tok, cur.tok)
                 pair_cnt[p] += freq
 
-                # ✅ deterministic：存 word_id + prev.pos + prev node
+                # deterministic：存 word_id + prev.pos + prev node
                 pair_occ[p].add((word_id, prev.pos, prev))
 
             prev = cur
@@ -253,6 +255,7 @@ def merge_best_pair(
     pair_cnt: dict[tuple[bytes, bytes], int],
     pair_occ: dict[tuple[bytes, bytes], set[tuple[int, int, Node]]],
     freqs: list[int],
+    heap: list[tuple[int, RevPair]],
 ) -> int:
     """
     增量 merge：
@@ -262,6 +265,15 @@ def merge_best_pair(
       - pair_occ 是 lazy 的：旧的 occ 不删也没关系，下一轮会靠 alive + tok match skip
     """
     A, B = best
+    def push_if_positive(p: tuple[bytes, bytes]) -> None:
+        """
+        把目前最新的 pair_cnt[p] 推進 heap（lazy delete）
+        - 不需要把舊值從 heap 移除：之後 pop 出來時比對 pair_cnt 即可丟掉 stale
+        """
+        c = pair_cnt.get(p, 0)
+        if c > 0:
+            heapq.heappush(heap, (-c, RevPair(p)))
+
     occs = pair_occ.get(best, set())
     merged = 0
 
@@ -271,8 +283,10 @@ def merge_best_pair(
             continue
 
         # right = 下一個 alive node（跳過被 merge 掉的 dead nodes）
-        right = Node.next_alive(left)
-        if right is None or (not right.alive):
+        right = left.next
+        while right is not None and not right.alive:
+            right = right.next
+        if right is None:
             continue
 
         # 校验一下当前是否仍然是 (A,B)
@@ -285,10 +299,15 @@ def merge_best_pair(
 
         # ---- decrement old pairs（把被破坏的边界 pair 从统计中减掉） ----
         pair_cnt[best] = pair_cnt.get(best, 0) - w
+        push_if_positive(best)
         if x is not None:
-            pair_cnt[(x.tok, left.tok)] = pair_cnt.get((x.tok, left.tok), 0) - w
+            px = (x.tok, left.tok)
+            pair_cnt[px] = pair_cnt.get(px, 0) - w
+            push_if_positive(px)
         if y is not None:
-            pair_cnt[(right.tok, y.tok)] = pair_cnt.get((right.tok, y.tok), 0) - w
+            py = (right.tok, y.tok)
+            pair_cnt[py] = pair_cnt.get(py, 0) - w
+            push_if_positive(py)
 
         # ---- do merge in DLL ----
         new_tok = A + B
@@ -306,11 +325,13 @@ def merge_best_pair(
             p = (x.tok, left.tok)
             pair_cnt[p] = pair_cnt.get(p, 0) + w
             pair_occ[p].add((word_id, x.pos, x))
+            push_if_positive(p)
 
         if y is not None:
             p = (left.tok, y.tok)
             pair_cnt[p] = pair_cnt.get(p, 0) + w
             pair_occ[p].add((word_id, left.pos, left))
+            push_if_positive(p)
 
         merged += 1
 
@@ -340,20 +361,31 @@ def train_bpe(
 
     merges: list[tuple[bytes, bytes]] = []
 
+    heap: list[tuple[int, RevPair]] = []
+    for p, c in pair_cnt.items():
+        if c > 0:
+            heapq.heappush(heap, (-c, RevPair(p)))
+
     for _ in range(num_merges):
         # 过滤掉 <=0 的 pair（增量更新 + lazy occ 可能导致 0/负数）
-        candidates = [(p, c) for p, c in pair_cnt.items() if c > 0]
-        if not candidates:
+        best: Optional[tuple[bytes, bytes]] = None
+        while heap:
+            neg_c, rp = heapq.heappop(heap)
+            p = rp.p
+            c = -neg_c
+            cur = pair_cnt.get(p, 0)
+            if cur != c or cur <= 0:
+                continue
+            best = p
             break
-
-        # tie-break：先比频率，再比 pair 本身（lexicographically greater）
-        best = max(candidates, key=lambda kv: (kv[1], kv[0]))[0]
+        if best is None:
+            break
 
         A, B = best
         vocab[len(vocab)] = A + B
         merges.append(best)
 
-        k = merge_best_pair(best, pair_cnt, pair_occ, freqs=freqs)
+        k = merge_best_pair(best, pair_cnt, pair_occ, freqs=freqs, heap=heap)
         # k==0 一般是 occ 都 stale 了（被之前 merge 影响），不致命，继续即可
         # 继续下一轮会选别的 pair
 
